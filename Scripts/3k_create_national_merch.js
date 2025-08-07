@@ -40,6 +40,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/log', 'N/format'],
         var INV_DETAIL_SEARCH = 'customsearch_tek_item_inventory_detail';
         var RATE_CFI_SEARCH = 'customsearch_tek_costo_cif_lote_detalle';
         var COST_ZFI_SEARCH = 'customsearch_tek_costo_zfi_lote_detalle';
+        var COST_STANDAR_SEARCH = 'customsearch_3k_standar_cost_sum_nationa'
 
 
         /**
@@ -399,7 +400,7 @@ define(['N/record', 'N/runtime', 'N/search', 'N/log', 'N/format'],
                         }
                         log.debug('costZFIDictionary[receiptItemId]', costZFIDictionary[receiptItemId]);
                         itemDetail[i].cost = costZFIDictionary[receiptItemId];
-                    
+
 
                         if (rptSearchRateCFIDictionary.error) {
                             throw rptSearchRateCFIDictionary.mensaje
@@ -409,32 +410,6 @@ define(['N/record', 'N/runtime', 'N/search', 'N/log', 'N/format'],
 
                         respuesta.items.push(itemDetail[i]);
                     }
-
-                    
-
-
-
-                    // for (var i = 0; i < itemDetail.length; i++) {
-                    //     var usage = runtime.getCurrentScript().getRemainingUsage();
-                    //     log.debug('usage getInventoryDetail bucle inicio', usage);
-
-                    //     // var rptSearchCost = searchCostZFI(itemDetail[i]);
-                    //     // if (rptSearchCost.error || !rptSearchCost.esCorrecto) {
-                    //     //     throw rptSearchCost.mensaje;
-                    //     // }
-                    //     // itemDetail[i].cost = rptSearchCost.cost;
-
-                    //     // var rptSearchRate = searchRateCFI(itemDetail[i])
-                    //     // if (rptSearchRate.error || !rptSearchRate.esCorrecto) {
-                    //     //     throw rptSearchRate.mensaje;
-                    //     // }
-                    //     // itemDetail[i].rate = rptSearchRate.rate;
-
-                    //     // respuesta.landedCostTotal += rptSearchCost.cost;
-                       
-                    //     var usage = runtime.getCurrentScript().getRemainingUsage();
-                    //     log.debug('usage getInventoryDetail bucle fin', usage);
-                    // }
                 }
                 if (respuesta.items.length > 0) {
                     respuesta.esCorrecto = true;
@@ -818,11 +793,11 @@ define(['N/record', 'N/runtime', 'N/search', 'N/log', 'N/format'],
                     resultsBatch = resultSet.getRange({ start: start, end: start + pageSize });
 
                     resultsBatch.forEach(result => {
-                        const itemId = result.getValue(result.columns[0]); 
-                        const receiptId = result.getValue(result.columns[1]); 
+                        const itemId = result.getValue(result.columns[0]);
+                        const receiptId = result.getValue(result.columns[1]);
 
-                        const quantity = parseFloat(result.getValue(result.columns[2])); 
-                        const rate = parseFloat(result.getValue(result.columns[3])); 
+                        const quantity = parseFloat(result.getValue(result.columns[2]));
+                        const rate = parseFloat(result.getValue(result.columns[3]));
 
                         if (!isNaN(quantity) && quantity !== 0 && !isNaN(rate)) {
                             const key = `${receiptId}|${itemId}`;
@@ -932,6 +907,22 @@ define(['N/record', 'N/runtime', 'N/search', 'N/log', 'N/format'],
                 objRecord.setValue({ fieldId: EMBARQUE_FIELD, value: creationInfo.fields.shipment.id, });
                 objRecord.setValue({ fieldId: 'landedcostperline', value: true, });
 
+                var itemArray = [];
+                for (var i = 0; i < creationInfo.items.length; i++) {
+                    var itemId = creationInfo.items[i].item;
+                    var location = creationInfo.items[i].locationIn;
+                    itemArray.push({ itemId, location });
+                }
+                log.debug('itemArray', itemArray)
+
+                var standarCostArray = getStandardCostSumDictionary(itemArray, adjustmentDate)
+                log.debug('standarCostArray', standarCostArray)
+
+                if (standarCostArray.error) {
+                    throw standarCostArray.mensaje
+                }
+
+
                 // Iterar sobre los elementos de items para agregarlos al registro
                 for (var i = 0; i < creationInfo.items.length; i++) {
                     var location = creationInfo.items[i].locationIn; //UBICACION DE AJUSTE
@@ -940,16 +931,14 @@ define(['N/record', 'N/runtime', 'N/search', 'N/log', 'N/format'],
                     var quantityItem = creationInfo.items[i].quantity;
                     // var unitsItem = creationInfo.items[i].units;
 
-                    // Obtener la sumatoria del costo estándar del ítem
-                    var rptSumCost = getStandardCostSum(itemId, location, adjustmentDate);
-                    log.debug('getStandardCostSum', rptSumCost);
-                    if (!rptSumCost.esCorrecto) {
-                        throw rptSumCost.mensaje;
-                    }
+                    var key = itemId + '-' + location;
+                    var rptSumCostNow = parseFloat(standarCostArray.costMap[key])
+
+                    log.debug('rptSumCostNow', rptSumCostNow);
 
                     // Calcular el rate convertido a USD
-                    // var rateInUSD = rptSumCost.sumCost / exchangeRate * quantityItem * unitsItem;
-                    var rateInUSD = rptSumCost.sumCost / exchangeRate
+                    log.debug('Calcular el rate convertido a USD (rateInUSD = rptSumCostNow / exchangeRate)', { rptSumCostNow, exchangeRate, rptSumCostNow })
+                    var rateInUSD = rptSumCostNow / exchangeRate
 
                     log.debug('rateInUSD', rateInUSD);
 
@@ -992,66 +981,74 @@ define(['N/record', 'N/runtime', 'N/search', 'N/log', 'N/format'],
             return respuesta;
         }
 
-        function getStandardCostSum(itemId, locationId, adjustmentDate) {
-            var respuesta = { error: false, esCorrecto: false, sumCost: 0 };
-            log.debug('getStandardCostSum adjustmentDate', adjustmentDate);
+        function getStandardCostSumDictionary(itemDetails, adjustmentDate) {
+            var respuesta = { error: false, esCorrecto: false };
+
+            const itemIds = [...new Set(itemDetails.map(d => d.itemId))];
+            const locationIds = [...new Set(itemDetails.map(d => d.location))];
+
+            log.debug('itemIds', itemIds)
+            log.debug('locationIds', locationIds)
             try {
-                var itemSearchObj = search.create({
-                    type: "item",
-                    filters:
-                        [
-                            ["internalid", "anyof", itemId],
-                            "AND",
-                            ["transaction.type", "anyof", "InvReval"],
-                            "AND",
-                            ["transaction.costcomponentamount", "greaterthanorequalto", "0.00"],
-                            "AND",
-                            ["transaction.location", "anyof", locationId],
-                            "AND",
-                            ["transaction.trandate", "on", adjustmentDate]
-                        ],
-                    columns:
-                        [
-                            search.createColumn({
-                                name: "costcomponentstandardcost",
-                                join: "transaction",
-                                summary: "SUM",
-                                label: "Costo estándar de componente de costo",
-                                sort: search.Sort.ASC
-                            })
-                        ]
-                });
+                const costStandarSearch = search.load({ id: COST_STANDAR_SEARCH });
 
-                var searchResults = itemSearchObj.run().getRange({ start: 0, end: 1 });
-                if (searchResults && searchResults.length > 0) {
-                    var sumCost = searchResults[0].getValue({
-                        name: "costcomponentstandardcost",
-                        join: "transaction",
-                        summary: "SUM"
+                costStandarSearch.filters.push(search.createFilter({
+                    name: 'internalid',
+                    operator: search.Operator.ANYOF,
+                    values: itemIds
+                }));
+
+                costStandarSearch.filters.push(search.createFilter({
+                    name: 'location',
+                    join: 'transaction',
+                    operator: search.Operator.ANYOF,
+                    values: locationIds
+                }));
+
+                costStandarSearch.filters.push(search.createFilter({
+                    name: 'trandate',
+                    join: 'transaction',
+                    operator: search.Operator.ONORBEFORE,
+                    values: adjustmentDate
+                }));
+
+                const resultSet = costStandarSearch.run();
+                let start = 0;
+                const pageSize = 1000;
+                let resultsBatch;
+
+                var seenCombinations = {};
+                var costMap = {}
+                do {
+                    resultsBatch = resultSet.getRange({ start: start, end: start + pageSize });
+
+                    log.debug('resultsBatch', resultsBatch)
+                    resultsBatch.forEach(result => {
+
+                        var itemId = result.getValue(result.columns[0]);
+                        var locationId = result.getValue(result.columns[1]);
+                        var trandate = result.getValue(result.columns[2]);
+                        var sumCost = result.getValue(result.columns[3]);
+
+                        log.debug('LINEA', { itemId, locationId, trandate, sumCost })
+
+                        var key = itemId + '-' + locationId;
+
+                        if (!seenCombinations[key]) {
+                            costMap[key] = parseFloat(sumCost) || 0;
+                            seenCombinations[key] = true;
+                        }
                     });
-                    if (sumCost && !isNaN(parseFloat(sumCost))) {
-                        // Si sumCost es válido, continuar
-                        respuesta.sumCost = parseFloat(sumCost) || 0;
-                        respuesta.esCorrecto = true;
-                    } else {
-                        // Si sumCost es nulo, vacío o no es un número, proceder a la segunda búsqueda
-                        log.debug('getStandardCostSum', 'SumCost es inválido o cero, buscando con la fecha más reciente.');
-                        // Realizar la segunda búsqueda
-                        var resultadoAlternativo = obtenerSumCostFechaReciente(itemId, locationId, adjustmentDate);
-                        return resultadoAlternativo;
-                    }
-                } else {
-                    // Si no se encuentran resultados con la fecha exacta, buscar con la fecha más reciente
-                    log.debug('getStandardCostSum', 'No se encontraron resultados con la fecha exacta, buscando con la fecha más reciente.');
-                    // Realizar la segunda búsqueda
-                    var resultadoAlternativo = obtenerSumCostFechaReciente(itemId, locationId, adjustmentDate);
-                    return resultadoAlternativo;
-                }
 
+                    start += pageSize;
+                } while (resultsBatch.length === pageSize);
+
+                respuesta.costMap = costMap;
+                respuesta.esCorrecto = true;
             } catch (error) {
                 respuesta.error = true;
-                respuesta.mensaje = "Error obteniendo la sumatoria del costo estándar: " + error.message;
-                log.error('getStandardCostSum', respuesta.mensaje);
+                respuesta.mensaje = "Error obteniendo el diccionario de las sumatorias del costo estándar: " + error.message;
+                log.error('getStandardCostSumDictionary', respuesta.mensaje);
             }
             return respuesta;
         }
